@@ -1,56 +1,79 @@
-// api/ocr.js
+// /api/ocr.js
 import OpenAI from "openai";
-import formidable from "formidable";
-import fs from "fs";
-
-// Disable bodyParser (important for file upload)
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    res.status(405).json({ error: "Method not allowed" });
-    return;
-  }
-
-  const form = new formidable.IncomingForm();
-  form.parse(req, async (err, fields, files) => {
-    if (err) {
-      res.status(500).json({ error: "Form parse failed" });
+  try {
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "Method not allowed" });
       return;
     }
 
-    try {
-      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-      const imagePath = files.image[0].filepath;
+    // Read raw body
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const bodyStr = Buffer.concat(chunks).toString("utf8");
+    const { imageBase64 } = JSON.parse(bodyStr || "{}");
 
-      const response = await client.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are an OCR assistant that reads receipts and returns JSON with item names and prices.",
-          },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "Extract all line items and prices as JSON { items:[{name, price}] }" },
-              { type: "image_url", image_url: "data:image/jpeg;base64," + fs.readFileSync(imagePath, "base64") },
-            ],
-          },
-        ],
-        response_format: { type: "json_object" },
-      });
-
-      const result = JSON.parse(response.choices[0].message.content);
-      res.status(200).json(result);
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ error: e.message });
+    if (!imageBase64) {
+      res.status(400).json({ error: "imageBase64 is required" });
+      return;
     }
-  });
+
+    if (!process.env.OPENAI_API_KEY) {
+      res.status(500).json({ error: "OPENAI_API_KEY not set on server" });
+      return;
+    }
+
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    // Ask model to return clean JSON
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are an OCR and receipt parser. Return strict JSON only.",
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text:
+                "Extract all purchasable line items from this receipt. " +
+                "Ignore subtotal, tax, tip, payment and store info. " +
+                "Return JSON of the form: {\"items\":[{\"name\":\"string\",\"price\":number}]} " +
+                "Use a number for price (no currency sign).",
+            },
+            { type: "image_url", image_url: imageBase64 },
+          ],
+        },
+      ],
+      temperature: 0,
+    });
+
+    const content = completion.choices?.[0]?.message?.content || "{}";
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      parsed = { items: [] };
+    }
+
+    // Basic normalization guard
+    if (!Array.isArray(parsed.items)) parsed.items = [];
+    parsed.items = parsed.items
+      .map((it) => ({
+        name: String(it.name || "").trim(),
+        price: Number(it.price || 0),
+      }))
+      .filter((it) => it.name && isFinite(it.price) && it.price > 0);
+
+    res.status(200).json(parsed);
+  } catch (e) {
+    console.error("OCR API error:", e);
+    res.status(500).json({ error: e.message || "Server error" });
+  }
 }

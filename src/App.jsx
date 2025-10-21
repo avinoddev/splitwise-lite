@@ -85,37 +85,54 @@ export default function App() {
   }, [items, participants, assignments, subtotalCents, taxPercent, tipPercent]);
 
   /* handlers */
-  const handleFile = async (file) => {
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    setImageUrl(url);
-    setIsOcrLoading(true);
+const handleFile = async (file) => {
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  setImageUrl(url);
+  setIsOcrLoading(true);
 
-    try {
-      const formData = new FormData();
-      formData.append("image", file);
+  try {
+    // Convert file to base64 data URL
+    const toBase64 = (f) =>
+      new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result); // e.g., "data:image/jpeg;base64,AAAA..."
+        reader.onerror = reject;
+        reader.readAsDataURL(f);
+      });
 
-      const response = await fetch("/api/ocr", { method: "POST", body: formData });
-      const data = await response.json();
+    const imageBase64 = await toBase64(file);
 
-      if (data.items && Array.isArray(data.items)) {
-        setItems(
-          data.items.map(it => ({
-            id: uuidv4(),
-            name: it.name,
-            priceCents: toCents(it.price)
-          }))
-        );
-      } else {
-        alert("OCR didn’t return any items. Try a clearer photo.");
-      }
-    } catch (err) {
-      console.error(err);
-      alert("Error running OCR. Check server logs or API key.");
-    } finally {
-      setIsOcrLoading(false);
+    const res = await fetch("/api/ocr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageBase64 }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
     }
-  };
+
+    const data = await res.json();
+    if (Array.isArray(data.items)) {
+      setItems(
+        data.items.map((it) => ({
+          id: uuidv4(),
+          name: it.name,
+          priceCents: Math.round((it.price ?? 0) * 100),
+        }))
+      );
+    } else {
+      alert("OCR returned no items. Try a clearer photo.");
+    }
+  } catch (e) {
+    console.error(e);
+    alert("Error running OCR. Check server logs or API key.");
+  } finally {
+    setIsOcrLoading(false);
+  }
+};
 
   /* UI */
   return (
