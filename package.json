@@ -9,8 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "formidable": "^3.5.4",
     "framer-motion": "^10.18.0",
     "lucide-react": "^0.367.0",
+    "openai": "^6.6.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tesseract.js": "^5.1.0",
